@@ -1,5 +1,8 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import * as fflate from 'fflate';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 import { 
   MediaMixInput, 
   MediaMixResult, 
@@ -31,7 +34,9 @@ const DEFAULT_CATALOG: CatalogItem[] = [
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'mixer' | 'bookings' | 'schedule' | 'catalog'>('mixer');
   const [showToast, setShowToast] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   
+  const resultRef = useRef<HTMLDivElement>(null);
   const [catalog, setCatalog] = useState<CatalogItem[]>(DEFAULT_CATALOG);
   const [budget, setBudget] = useState<number>(20000000);
   const [commission, setCommission] = useState<number>(20);
@@ -43,287 +48,218 @@ const App: React.FC = () => {
   const [currentLines, setCurrentLines] = useState<MediaMixLine[]>([]);
   const [isManualMode, setIsManualMode] = useState(false);
 
-  // 데이터 로드 (URL 우선, 그 다음 LocalStorage)
+  // 데이터 압축을 통한 단축 URL 생성 (Client-side Shortening)
+  const compress = (data: any) => {
+    const json = JSON.stringify(data);
+    const buf = new TextEncoder().encode(json);
+    const compressed = fflate.zlibSync(buf, { level: 9 }); // 최고 수준 압축
+    return btoa(String.fromCharCode.apply(null, Array.from(compressed)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  };
+
+  const decompress = (str: string) => {
+    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    const binary = atob(base64);
+    const buf = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
+    const decompressed = fflate.unzlibSync(buf);
+    return JSON.parse(new TextDecoder().decode(decompressed));
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const sharedData = params.get('data');
-
-    if (sharedData) {
+    const compressedData = params.get('s');
+    if (compressedData) {
       try {
-        const decoded = JSON.parse(decodeURIComponent(atob(sharedData)));
-        setCatalog(decoded.catalog || DEFAULT_CATALOG);
-        setBudget(decoded.budget || 20000000);
-        setCommission(decoded.commission || 20);
-        setDiscountRate(decoded.discountRate || 0);
-        setDurationDays(decoded.durationDays || 28);
-        setStartDate(decoded.startDate || new Date().toISOString().split('T')[0]);
-        setBookings(decoded.bookings || []);
-        
-        // 데이터 로드 후 URL 정리 (새로고침 시 중복 로드 방지 원할 경우 선택)
-        // window.history.replaceState({}, document.title, window.location.pathname);
-        alert('공유받은 미디어믹스 데이터를 성공적으로 로드했습니다.');
-      } catch (e) {
-        console.error('Failed to parse shared data', e);
-      }
+        const d = decompress(compressedData);
+        setCatalog(d.c || DEFAULT_CATALOG);
+        setBudget(d.b || 20000000);
+        setCommission(d.cm || 20);
+        setDiscountRate(d.dr || 0);
+        setDurationDays(d.dd || 28);
+        setStartDate(d.sd || new Date().toISOString().split('T')[0]);
+        setBookings(d.bk || []);
+      } catch (e) { console.error('Data Load Error', e); }
     } else {
-      // LocalStorage에서 복구
       const savedCatalog = localStorage.getItem(`${STORAGE_KEY}_catalog`);
-      const savedBudget = localStorage.getItem(`${STORAGE_KEY}_budget`);
-      const savedCommission = localStorage.getItem(`${STORAGE_KEY}_commission`);
-      const savedDiscount = localStorage.getItem(`${STORAGE_KEY}_discount`);
-      const savedDuration = localStorage.getItem(`${STORAGE_KEY}_duration`);
-      const savedStart = localStorage.getItem(`${STORAGE_KEY}_start_date`);
-      const savedBookings = localStorage.getItem(`${STORAGE_KEY}_bookings`);
-
       if (savedCatalog) setCatalog(JSON.parse(savedCatalog));
-      if (savedBudget) setBudget(Number(savedBudget));
-      if (savedCommission) setCommission(Number(savedCommission));
-      if (savedDiscount) setDiscountRate(Number(savedDiscount));
-      if (savedDuration) setDurationDays(Number(savedDuration));
-      if (savedStart) setStartDate(savedStart);
-      if (savedBookings) setBookings(JSON.parse(savedBookings));
     }
   }, []);
 
-  // 상태 변경 시 LocalStorage 저장
-  useEffect(() => {
-    localStorage.setItem(`${STORAGE_KEY}_catalog`, JSON.stringify(catalog));
-    localStorage.setItem(`${STORAGE_KEY}_budget`, budget.toString());
-    localStorage.setItem(`${STORAGE_KEY}_commission`, commission.toString());
-    localStorage.setItem(`${STORAGE_KEY}_discount`, discountRate.toString());
-    localStorage.setItem(`${STORAGE_KEY}_duration`, durationDays.toString());
-    localStorage.setItem(`${STORAGE_KEY}_start_date`, startDate);
-    localStorage.setItem(`${STORAGE_KEY}_bookings`, JSON.stringify(bookings));
-  }, [catalog, budget, commission, discountRate, durationDays, startDate, bookings]);
-
-  // 공유 링크 생성 함수
   const handleShare = () => {
-    const stateToShare = {
-      catalog, budget, commission, discountRate, durationDays, startDate, bookings
+    // URL 길이를 줄이기 위해 최소한의 데이터만 전달
+    const state = { 
+      c: catalog.map(i => ({id:i.id, s:i.screen, p:i.placement, sz:i.size, t:i.ad_type, pr:i.price_4w, sl:i.total_slots, im:i.impressions_4w, ct:i.ctr})), 
+      b: budget, cm: commission, dr: discountRate, dd: durationDays, sd: startDate, bk: bookings 
     };
-    const jsonStr = JSON.stringify(stateToShare);
-    // 한글 깨짐 방지를 위한 Base64 인코딩
-    const encodedData = btoa(encodeURIComponent(jsonStr));
-    const shareUrl = `${window.location.origin}${window.location.pathname}?data=${encodedData}`;
+    const compressed = compress(state);
+    const shareUrl = `${window.location.origin}${window.location.pathname}?s=${compressed}`;
+    navigator.clipboard.writeText(shareUrl).then(() => { setShowToast(true); setTimeout(() => setShowToast(false), 3000); });
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!resultRef.current || currentLines.length === 0) return;
+    setIsDownloading(true);
+    window.scrollTo(0, 0);
     
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      setShowToast(true);
-      setTimeout(() => setShowToast(false), 3000);
-    });
+    // PDF 렌더링을 위해 잠깐의 시간 확보
+    setTimeout(async () => {
+      try {
+        const canvas = await html2canvas(resultRef.current!, {
+          scale: 3, 
+          useCORS: true,
+          backgroundColor: '#f8fafc',
+          ignoreElements: (el) => el.classList.contains('pdf-hide'),
+        });
+        const imgData = canvas.toDataURL('image/png', 1.0);
+        const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const imgWidth = pdfWidth - 14; 
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        pdf.addImage(imgData, 'PNG', 7, 10, imgWidth, imgHeight);
+        pdf.save(`미디어믹스_제안서_${new Date().toISOString().split('T')[0]}.pdf`);
+      } catch (e) { alert('PDF 생성 실패'); } finally { setIsDownloading(false); }
+    }, 100);
   };
 
   const handleGenerate = useCallback(() => {
     const input: MediaMixInput = {
-      budget_total: budget,
-      catalog: catalog,
-      priority_order: catalog.map(c => c.id),
-      commission_rate: commission,
-      discount: { type: "none", rate: discountRate },
-      duration_days: durationDays,
-      start_date: startDate,
-      existing_bookings: bookings,
-      rules: {
-        min_total_weeks: 1,
-        line_week_options: [4],
-        allow_duplicate_lines: false,
-        max_lines: 10,
-        big_residual_threshold: 0.1
-      }
+      budget_total: budget, catalog, priority_order: catalog.map(c => c.id),
+      commission_rate: commission, discount: { type: "none", rate: discountRate },
+      duration_days: durationDays, start_date: startDate, existing_bookings: bookings,
+      rules: { min_total_weeks: 1, line_week_options: [4], allow_duplicate_lines: false, max_lines: 10, big_residual_threshold: 0.1 }
     };
     const newMix = generateMediaMix(input);
     setCurrentLines(newMix.lines);
     setIsManualMode(false);
   }, [budget, commission, discountRate, durationDays, startDate, bookings, catalog]);
 
-  const addBooking = useCallback((b: Booking) => {
-    setBookings(prev => [...prev, b]);
-  }, []);
-
-  const addBookings = useCallback((newItems: Booking[]) => {
-    setBookings(prev => [...prev, ...newItems]);
-  }, []);
-
-  const updateBooking = useCallback((updated: Booking) => {
-    setBookings(prev => prev.map(b => b.id === updated.id ? updated : b));
-  }, []);
-
-  const deleteBooking = useCallback((id: string) => {
-    setBookings(prev => prev.filter(b => b.id !== id));
-  }, []);
-
-  useEffect(() => { 
-    if (!isManualMode) {
-      handleGenerate(); 
-    }
-  }, [budget, durationDays, discountRate, catalog, handleGenerate, isManualMode]);
-
-  const handleRemoveLine = (idx: number) => {
-    setIsManualMode(true);
-    setCurrentLines(prev => prev.filter((_, i) => i !== idx));
-  };
-
-  const handleAddLine = (productId: string) => {
-    const item = catalog.find(c => c.id === productId);
-    if (!item) return;
-    if (currentLines.find(l => l.id === productId)) {
-      alert('이미 믹스에 포함된 상품입니다.');
-      return;
-    }
-    setIsManualMode(true);
-    const newLine = createLine(item, durationDays);
-    setCurrentLines(prev => [...prev, newLine]);
-  };
-
   const result = calculateResult(currentLines, budget, discountRate, durationDays);
 
-  const formatDuration = (days: number) => {
-    const weeks = Math.floor(days / 7);
-    const rem = days % 7;
-    return weeks > 0 ? `${weeks}주 ${rem > 0 ? rem + '일' : ''}` : `${days}일`;
-  };
+  useEffect(() => { if (!isManualMode) handleGenerate(); }, [budget, durationDays, discountRate, catalog, handleGenerate, isManualMode]);
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-20 font-['Pretendard']">
-      {/* 공유 성공 토스트 */}
+    <div className="min-h-screen bg-slate-50 pb-20 font-['Pretendard'] text-slate-800">
       {showToast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl font-bold text-sm animate-bounce flex items-center gap-2">
-          <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path></svg>
-          공유 링크가 클립보드에 복사되었습니다!
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-5 py-2.5 rounded-full shadow-2xl font-bold text-[10px] animate-bounce">
+          ✅ 공유 스마트 단축 링크가 복사되었습니다
         </div>
       )}
 
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-xl italic shadow-indigo-100 shadow-lg">M</div>
+        <div className="max-w-7xl mx-auto px-4 h-12 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm shadow-md">M</div>
             <div>
-              <h1 className="text-lg font-black tracking-tight text-slate-900 leading-tight">메디게이트 믹스 엔진</h1>
-              <div className="flex items-center gap-2">
-                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">Advanced Studio v6.0</p>
-                <span className="w-1 h-1 bg-slate-300 rounded-full"></span>
-                <p className="text-[9px] font-bold text-green-500 uppercase tracking-widest animate-pulse">Auto-Saving On</p>
-              </div>
+              <h1 className="text-xs font-black text-slate-900 leading-none">메디게이트 믹스</h1>
+              <p className="text-[7px] font-bold text-indigo-500 uppercase tracking-widest">v6.1 Advanced</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <nav className="hidden md:flex bg-slate-100 p-1 rounded-lg">
-              {[
-                {id: 'mixer', label: '믹스 생성'},
-                {id: 'bookings', label: '부킹 관리'},
-                {id: 'schedule', label: '부킹 현황'},
-                {id: 'catalog', label: '상품 관리'}
-              ].map((tab) => (
-                <button 
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
-                  className={`px-3 py-1.5 rounded-md text-[11px] font-black transition-all uppercase tracking-tighter ${activeTab === tab.id ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  {tab.label}
+          <div className="flex items-center gap-1.5">
+            <nav className="hidden lg:flex bg-slate-100 p-0.5 rounded-lg mr-1">
+              {['mixer', 'bookings', 'schedule', 'catalog'].map((id) => (
+                <button key={id} onClick={() => setActiveTab(id as any)} className={`px-2 py-1 rounded-md text-[9px] font-black transition-all uppercase ${activeTab === id ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {id === 'mixer' ? '믹스' : id === 'bookings' ? '부킹' : id === 'schedule' ? '현황' : '상품'}
                 </button>
               ))}
             </nav>
-
-            <button 
-              onClick={handleShare}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-black transition-all border border-indigo-100 shadow-sm"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
-              공유
+            <button onClick={handleDownloadPDF} disabled={isDownloading || currentLines.length === 0} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[9px] font-black bg-white hover:bg-rose-50 text-rose-600 border border-rose-100 shadow-sm transition-all">
+              {isDownloading ? '...' : 'PDF 제안서'}
+            </button>
+            <button onClick={handleShare} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-black shadow-md transition-all">
+              링크공유
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 mt-8">
+      <main className="max-w-7xl mx-auto px-4 mt-5">
         {activeTab === 'mixer' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            <div className="lg:col-span-4 space-y-6">
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="bg-slate-800 px-5 py-4 flex items-center justify-between">
-                  <h2 className="text-white font-bold text-sm">Campaign Control</h2>
-                  <div className="flex items-center gap-2">
-                    {isManualMode && <span className="text-[10px] bg-rose-500 text-white px-1.5 py-0.5 rounded font-bold">수동 편집중</span>}
-                  </div>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-4 space-y-4">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="bg-slate-900 px-4 py-2.5 flex items-center justify-between">
+                  <h2 className="text-white font-black text-[10px] uppercase tracking-widest">Option Panel</h2>
                 </div>
-                <div className="p-6 space-y-8">
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-end">
-                      <label className="text-sm font-bold text-slate-700">순 매체비 예산</label>
-                      <span className="text-lg font-black text-indigo-600">{(budget/10000).toLocaleString()}만원</span>
-                    </div>
-                    <input type="range" min="1000000" max="100000000" step="500000" value={budget} onChange={(e) => setBudget(Number(e.target.value))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                <div className="p-5 space-y-6">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-end"><label className="text-[9px] font-black text-slate-500 uppercase">광고 예산</label><span className="text-base font-black text-indigo-600 tracking-tighter">{(budget/10000).toLocaleString()}만원</span></div>
+                    <input type="range" min="1000000" max="100000000" step="500000" value={budget} onChange={(e) => setBudget(Number(e.target.value))} className="w-full h-1 bg-slate-100 rounded-full appearance-none accent-indigo-600" />
                   </div>
-                  <div className="space-y-4">
-                    <label className="text-sm font-bold text-slate-700">집행 시작일</label>
-                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full h-12 px-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:outline-indigo-500 cursor-pointer" />
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-black text-slate-500 uppercase">집행 개시일</label>
+                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-800 outline-none" />
                   </div>
-                  <div className="space-y-4">
-                    <label className="text-sm font-bold text-slate-700">집행 기간: {formatDuration(durationDays)}</label>
-                    <input type="range" min="1" max="90" step="1" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                  <div className="space-y-2">
+                    <label className="text-[9px] font-black text-slate-500 uppercase">집행 기간: {Math.floor(durationDays/7)}주 {durationDays%7}일</label>
+                    <input type="range" min="1" max="90" step="1" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} className="w-full h-1 bg-slate-100 rounded-full appearance-none accent-indigo-600" />
                   </div>
-                  <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">수수료 ({commission}%)</label>
-                      <input type="range" min="0" max="30" step="5" value={commission} onChange={(e) => setCommission(Number(e.target.value))} className="w-full accent-rose-400" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">할인율 ({discountRate}%)</label>
-                      <input type="range" min="0" max="50" step="1" value={discountRate} onChange={(e) => setDiscountRate(Number(e.target.value))} className="w-full accent-indigo-400" />
-                    </div>
+                  <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase">수수료 {commission}%</label><input type="range" min="0" max="30" step="5" value={commission} onChange={(e) => setCommission(Number(e.target.value))} className="w-full accent-rose-500" /></div>
+                    <div className="space-y-1.5"><label className="text-[8px] font-black text-slate-400 uppercase">할인율 {discountRate}%</label><input type="range" min="0" max="50" step="1" value={discountRate} onChange={(e) => setDiscountRate(Number(e.target.value))} className="w-full accent-indigo-500" /></div>
                   </div>
-                  <button onClick={handleGenerate} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-black transition-all uppercase tracking-tighter flex items-center justify-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                    AI 제안 다시받기 (초기화)
-                  </button>
+                  <button onClick={handleGenerate} className="w-full py-2.5 bg-slate-900 text-white rounded-lg text-[9px] font-black hover:bg-slate-800 transition-all shadow-lg">AI 제안 스마트 생성</button>
                 </div>
               </div>
             </div>
-            <div className="lg:col-span-8 space-y-6">
+
+            <div className="lg:col-span-8 space-y-5" ref={resultRef}>
               {result && (
                 <>
                   <SummaryCard result={result} budgetTotal={budget} commissionRate={commission} />
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+                  
+                  <div className="bg-white p-5 rounded-xl shadow-lg shadow-slate-200/40 border border-slate-200 space-y-5">
                     <div className="flex justify-between items-center">
-                      <h3 className="text-slate-800 font-bold text-md flex items-center gap-2">
-                        <span className="w-1.5 h-4 bg-indigo-600 rounded-full"></span>
-                        맞춤 미디어믹스 리스트
+                      <h3 className="text-slate-900 font-black text-[12px] flex items-center gap-1.5">
+                        <span className="w-1 h-4 bg-indigo-600 rounded-full"></span>
+                        제안 미디어믹스 리스트
                       </h3>
-                      <div className="flex gap-2">
-                        <select className="text-[11px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500" onChange={(e) => { if(e.target.value) { handleAddLine(e.target.value); e.target.value = ""; } }}>
-                          <option value="">+ 지면 직접 추가</option>
+                      {!isDownloading && (
+                        <select className="pdf-hide text-[9px] font-black border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none hover:border-indigo-500" onChange={(e) => { if(e.target.value) { const item = catalog.find(c => c.id === e.target.value); if(item) { setIsManualMode(true); setCurrentLines(prev => [...prev, createLine(item, durationDays)]); e.target.value = ""; } } }}>
+                          <option value="">+ 상품 직접 추가</option>
                           {catalog.filter(c => !currentLines.find(l => l.id === c.id)).map(c => <option key={c.id} value={c.id}>[{c.screen}] {c.placement}</option>)}
                         </select>
-                      </div>
+                      )}
                     </div>
-                    <div className="overflow-x-auto border border-slate-100 rounded-xl">
-                      <table className="min-w-full text-xs">
-                        <thead className="bg-slate-50 text-slate-500 font-bold">
-                          <tr>
-                            <th className="p-3 text-left">화면 | 위치</th>
-                            <th className="p-3 text-left">사이즈 | 타입</th>
-                            <th className="p-3 text-right">금액(VAT별도)</th>
-                            <th className="p-3 text-center">기간</th>
-                            <th className="p-3 text-left">예상 노출량</th>
-                            <th className="p-3 text-right">관리</th>
+
+                    <div className="overflow-x-auto rounded-lg border border-slate-100 overflow-hidden shadow-sm">
+                      <table className="min-w-full text-[9.5px]">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-100">
+                            <th className="p-3 text-left font-black text-slate-400 uppercase tracking-tight">화면 | 위치</th>
+                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">사이즈</th>
+                            <th className="p-3 text-right font-black text-slate-400 uppercase tracking-tight">금액 (NET)</th>
+                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">기간</th>
+                            <th className="p-3 text-left font-black text-slate-400 uppercase tracking-tight">예상 노출량</th>
+                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">CTR</th>
+                            {!isDownloading && <th className="pdf-hide p-3 text-right font-black text-slate-400">관리</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                           {result.lines.map((l, i) => (
-                            <tr key={`${l.id}-${i}`} className="hover:bg-indigo-50/20 transition-colors group">
-                              <td className="p-3"><span className="font-bold text-slate-900">{l.screen}</span><br/><span className="text-slate-400 text-[10px]">{l.placement}</span></td>
-                              <td className="p-3"><span className="text-slate-700 font-medium">{l.ad_type}</span><br/><span className="text-slate-400 text-[10px]">{l.size}</span></td>
-                              <td className="p-3 text-right font-black text-indigo-600">{l.price_actual.toLocaleString()}원</td>
-                              <td className="p-3 text-center font-bold text-slate-400">{formatDuration(l.days)}</td>
-                              <td className="p-3 text-slate-600 font-medium">{l.impressions_actual_text}</td>
-                              <td className="p-3 text-right">
-                                <button onClick={() => handleRemoveLine(i)} className="text-slate-300 hover:text-rose-500 transition-colors p-1" title="삭제">
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                </button>
+                            <tr key={`${l.id}-${i}`} className="hover:bg-indigo-50/10 transition-colors">
+                              <td className="p-3">
+                                <span className="font-black text-slate-900">{l.screen}</span><br/>
+                                <span className="text-slate-400 text-[8px] font-bold uppercase">{l.placement}</span>
                               </td>
+                              <td className="p-3 text-center text-slate-500 font-medium">{l.size}</td>
+                              <td className="p-3 text-right font-black text-indigo-600">{l.price_actual.toLocaleString()}원</td>
+                              <td className="p-3 text-center font-black text-slate-400">{l.days}일</td>
+                              <td className="p-3 text-slate-700 font-bold tracking-tight">{l.impressions_actual_text}</td>
+                              <td className="p-3 text-center"><span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-black text-[8px]">{l.ctr}</span></td>
+                              {!isDownloading && (
+                                <td className="pdf-hide p-3 text-right">
+                                  <button onClick={() => { setIsManualMode(true); setCurrentLines(prev => prev.filter((_, idx) => idx !== i)); }} className="text-slate-200 hover:text-rose-500 transition-all transform hover:scale-125">
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           ))}
-                          {result.lines.length === 0 && <tr><td colSpan={6} className="p-10 text-center text-slate-400 font-medium">선택된 광고 지면이 없습니다.</td></tr>}
                         </tbody>
                       </table>
                     </div>
@@ -334,17 +270,7 @@ const App: React.FC = () => {
             </div>
           </div>
         )}
-
-        {activeTab === 'bookings' && (
-          <BookingManager 
-            catalog={catalog} 
-            bookings={bookings} 
-            onAddBooking={addBooking}
-            onAddBookings={addBookings}
-            onUpdateBooking={updateBooking}
-            onDeleteBooking={deleteBooking}
-          />
-        )}
+        {activeTab === 'bookings' && <BookingManager catalog={catalog} bookings={bookings} onAddBooking={b => setBookings(p => [...p, b])} onAddBookings={bks => setBookings(p => [...p, ...bks])} onUpdateBooking={u => setBookings(p => p.map(b => b.id === u.id ? u : b))} onDeleteBooking={id => setBookings(p => p.filter(b => b.id !== id))} />}
         {activeTab === 'schedule' && <ScheduleChart catalog={catalog} bookings={bookings} />}
         {activeTab === 'catalog' && <CatalogManager catalog={catalog} onUpdateCatalog={setCatalog} />}
       </main>
