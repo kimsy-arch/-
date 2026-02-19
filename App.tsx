@@ -30,39 +30,62 @@ const DEFAULT_CATALOG: CatalogItem[] = [
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'mixer' | 'bookings' | 'schedule' | 'catalog'>('mixer');
+  const [showToast, setShowToast] = useState(false);
   
-  const [catalog, setCatalog] = useState<CatalogItem[]>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_catalog`);
-    return saved ? JSON.parse(saved) : DEFAULT_CATALOG;
-  });
-  const [budget, setBudget] = useState<number>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_budget`);
-    return saved ? Number(saved) : 20000000;
-  });
-  const [commission, setCommission] = useState<number>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_commission`);
-    return saved ? Number(saved) : 20;
-  });
-  const [discountRate, setDiscountRate] = useState<number>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_discount`);
-    return saved ? Number(saved) : 0;
-  });
-  const [durationDays, setDurationDays] = useState<number>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_duration`);
-    return saved ? Number(saved) : 28;
-  });
-  const [startDate, setStartDate] = useState<string>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_start_date`);
-    return saved || new Date().toISOString().split('T')[0];
-  });
-  const [bookings, setBookings] = useState<Booking[]>(() => {
-    const saved = localStorage.getItem(`${STORAGE_KEY}_bookings`);
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [catalog, setCatalog] = useState<CatalogItem[]>(DEFAULT_CATALOG);
+  const [budget, setBudget] = useState<number>(20000000);
+  const [commission, setCommission] = useState<number>(20);
+  const [discountRate, setDiscountRate] = useState<number>(0);
+  const [durationDays, setDurationDays] = useState<number>(28);
+  const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
 
   const [currentLines, setCurrentLines] = useState<MediaMixLine[]>([]);
   const [isManualMode, setIsManualMode] = useState(false);
 
+  // 데이터 로드 (URL 우선, 그 다음 LocalStorage)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedData = params.get('data');
+
+    if (sharedData) {
+      try {
+        const decoded = JSON.parse(decodeURIComponent(atob(sharedData)));
+        setCatalog(decoded.catalog || DEFAULT_CATALOG);
+        setBudget(decoded.budget || 20000000);
+        setCommission(decoded.commission || 20);
+        setDiscountRate(decoded.discountRate || 0);
+        setDurationDays(decoded.durationDays || 28);
+        setStartDate(decoded.startDate || new Date().toISOString().split('T')[0]);
+        setBookings(decoded.bookings || []);
+        
+        // 데이터 로드 후 URL 정리 (새로고침 시 중복 로드 방지 원할 경우 선택)
+        // window.history.replaceState({}, document.title, window.location.pathname);
+        alert('공유받은 미디어믹스 데이터를 성공적으로 로드했습니다.');
+      } catch (e) {
+        console.error('Failed to parse shared data', e);
+      }
+    } else {
+      // LocalStorage에서 복구
+      const savedCatalog = localStorage.getItem(`${STORAGE_KEY}_catalog`);
+      const savedBudget = localStorage.getItem(`${STORAGE_KEY}_budget`);
+      const savedCommission = localStorage.getItem(`${STORAGE_KEY}_commission`);
+      const savedDiscount = localStorage.getItem(`${STORAGE_KEY}_discount`);
+      const savedDuration = localStorage.getItem(`${STORAGE_KEY}_duration`);
+      const savedStart = localStorage.getItem(`${STORAGE_KEY}_start_date`);
+      const savedBookings = localStorage.getItem(`${STORAGE_KEY}_bookings`);
+
+      if (savedCatalog) setCatalog(JSON.parse(savedCatalog));
+      if (savedBudget) setBudget(Number(savedBudget));
+      if (savedCommission) setCommission(Number(savedCommission));
+      if (savedDiscount) setDiscountRate(Number(savedDiscount));
+      if (savedDuration) setDurationDays(Number(savedDuration));
+      if (savedStart) setStartDate(savedStart);
+      if (savedBookings) setBookings(JSON.parse(savedBookings));
+    }
+  }, []);
+
+  // 상태 변경 시 LocalStorage 저장
   useEffect(() => {
     localStorage.setItem(`${STORAGE_KEY}_catalog`, JSON.stringify(catalog));
     localStorage.setItem(`${STORAGE_KEY}_budget`, budget.toString());
@@ -72,6 +95,22 @@ const App: React.FC = () => {
     localStorage.setItem(`${STORAGE_KEY}_start_date`, startDate);
     localStorage.setItem(`${STORAGE_KEY}_bookings`, JSON.stringify(bookings));
   }, [catalog, budget, commission, discountRate, durationDays, startDate, bookings]);
+
+  // 공유 링크 생성 함수
+  const handleShare = () => {
+    const stateToShare = {
+      catalog, budget, commission, discountRate, durationDays, startDate, bookings
+    };
+    const jsonStr = JSON.stringify(stateToShare);
+    // 한글 깨짐 방지를 위한 Base64 인코딩
+    const encodedData = btoa(encodeURIComponent(jsonStr));
+    const shareUrl = `${window.location.origin}${window.location.pathname}?data=${encodedData}`;
+    
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    });
+  };
 
   const handleGenerate = useCallback(() => {
     const input: MediaMixInput = {
@@ -145,6 +184,14 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-['Pretendard']">
+      {/* 공유 성공 토스트 */}
+      {showToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl font-bold text-sm animate-bounce flex items-center gap-2">
+          <svg className="w-5 h-5 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path></svg>
+          공유 링크가 클립보드에 복사되었습니다!
+        </div>
+      )}
+
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -158,22 +205,33 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-          <nav className="flex bg-slate-100 p-1 rounded-lg">
-            {[
-              {id: 'mixer', label: '믹스 생성'},
-              {id: 'bookings', label: '부킹 관리'},
-              {id: 'schedule', label: '부킹 현황'},
-              {id: 'catalog', label: '상품 관리'}
-            ].map((tab) => (
-              <button 
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`px-3 py-1.5 rounded-md text-[11px] font-black transition-all uppercase tracking-tighter ${activeTab === tab.id ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
+
+          <div className="flex items-center gap-4">
+            <nav className="hidden md:flex bg-slate-100 p-1 rounded-lg">
+              {[
+                {id: 'mixer', label: '믹스 생성'},
+                {id: 'bookings', label: '부킹 관리'},
+                {id: 'schedule', label: '부킹 현황'},
+                {id: 'catalog', label: '상품 관리'}
+              ].map((tab) => (
+                <button 
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`px-3 py-1.5 rounded-md text-[11px] font-black transition-all uppercase tracking-tighter ${activeTab === tab.id ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+
+            <button 
+              onClick={handleShare}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl text-xs font-black transition-all border border-indigo-100 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
+              공유
+            </button>
+          </div>
         </div>
       </header>
 
