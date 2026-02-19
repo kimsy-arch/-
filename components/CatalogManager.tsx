@@ -96,7 +96,7 @@ const CatalogManager: React.FC<Props> = ({ catalog, onUpdateCatalog }) => {
               className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-4 gap-4 mt-2">
+          <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-5 gap-3 mt-2">
             <input 
               type="text" placeholder="사이즈 (예: 800X80)"
               value={newItem.size} onChange={e => setNewItem({...newItem, size: e.target.value})}
@@ -110,6 +110,11 @@ const CatalogManager: React.FC<Props> = ({ catalog, onUpdateCatalog }) => {
             <input 
               type="text" placeholder="노출량 (예: 10만)"
               value={newItem.impressions_4w} onChange={e => setNewItem({...newItem, impressions_4w: e.target.value})}
+              className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold outline-none"
+            />
+            <input 
+              type="text" placeholder="평균 CTR (예: 0.15%)"
+              value={newItem.ctr} onChange={e => setNewItem({...newItem, ctr: e.target.value})}
               className="h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold outline-none"
             />
             <button type="submit" className="h-10 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">
@@ -133,7 +138,8 @@ const CatalogManager: React.FC<Props> = ({ catalog, onUpdateCatalog }) => {
                 <th className="px-6 py-4 text-left">사이즈/타입</th>
                 <th className="px-6 py-4 text-right">4주 가격</th>
                 <th className="px-6 py-4 text-center">구좌수</th>
-                <th className="px-6 py-4 text-left">노출/CTR</th>
+                <th className="px-6 py-4 text-left">예상 노출량</th>
+                <th className="px-6 py-4 text-center">평균 CTR</th>
                 <th className="px-6 py-4 text-right">관리</th>
               </tr>
             </thead>
@@ -185,15 +191,16 @@ const CatalogManager: React.FC<Props> = ({ catalog, onUpdateCatalog }) => {
                   </td>
                   <td className="px-6 py-4">
                     {editingId === item.id ? (
-                      <div className="space-y-1">
-                        <input className="w-full p-2 border border-slate-200 rounded bg-white text-[11px] outline-none focus:border-indigo-500" value={editData?.impressions_4w} onChange={e => setEditData({...editData!, impressions_4w: e.target.value})} />
-                        <input className="w-full p-2 border border-slate-200 rounded bg-white text-[11px] outline-none focus:border-indigo-500" value={editData?.ctr} onChange={e => setEditData({...editData!, ctr: e.target.value})} />
-                      </div>
+                      <input className="w-full p-2 border border-slate-200 rounded bg-white text-[11px] outline-none focus:border-indigo-500" value={editData?.impressions_4w} onChange={e => setEditData({...editData!, impressions_4w: e.target.value})} />
                     ) : (
-                      <div>
-                        <p className="text-slate-600 font-medium">{item.impressions_4w}</p>
-                        <p className="text-[10px] text-slate-400">{item.ctr}</p>
-                      </div>
+                      <p className="text-slate-600 font-medium">{item.impressions_4w}</p>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    {editingId === item.id ? (
+                      <input className="w-full p-2 border border-slate-200 rounded bg-white text-[11px] outline-none focus:border-indigo-500 text-center" value={editData?.ctr} onChange={e => setEditData({...editData!, ctr: e.target.value})} />
+                    ) : (
+                      <p className="text-indigo-600 font-bold">{item.ctr}</p>
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">

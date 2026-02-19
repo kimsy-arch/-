@@ -17,7 +17,7 @@ import ScheduleChart from './components/ScheduleChart';
 import BookingManager from './components/BookingManager';
 import CatalogManager from './components/CatalogManager';
 
-const STORAGE_KEY = 'medigate_engine_data_v6';
+const STORAGE_KEY = 'medigate_engine_v7_persistent';
 
 const DEFAULT_CATALOG: CatalogItem[] = [
   { id: "A1", screen: "PC Main", placement: "A1", size: "560 X 187", ad_type: "JPEG, GIF", price_4w: 5000000, rotation: "6 구좌", total_slots: 6, impressions_4w: 100000, ctr: "0.21%" },
@@ -37,6 +37,8 @@ const App: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   
   const resultRef = useRef<HTMLDivElement>(null);
+
+  // Core States
   const [catalog, setCatalog] = useState<CatalogItem[]>(DEFAULT_CATALOG);
   const [budget, setBudget] = useState<number>(20000000);
   const [commission, setCommission] = useState<number>(20);
@@ -44,15 +46,14 @@ const App: React.FC = () => {
   const [durationDays, setDurationDays] = useState<number>(28);
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [bookings, setBookings] = useState<Booking[]>([]);
-
   const [currentLines, setCurrentLines] = useState<MediaMixLine[]>([]);
   const [isManualMode, setIsManualMode] = useState(false);
 
-  // 데이터 압축을 통한 단축 URL 생성 (Client-side Shortening)
+  // 1. Data Compression (Client-side Shortening)
   const compress = (data: any) => {
     const json = JSON.stringify(data);
     const buf = new TextEncoder().encode(json);
-    const compressed = fflate.zlibSync(buf, { level: 9 }); // 최고 수준 압축
+    const compressed = fflate.zlibSync(buf, { level: 9 });
     return btoa(String.fromCharCode.apply(null, Array.from(compressed)))
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
@@ -69,35 +70,71 @@ const App: React.FC = () => {
     return JSON.parse(new TextDecoder().decode(decompressed));
   };
 
+  // 2. Persistent Storage & URL Load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const compressedData = params.get('s');
-    if (compressedData) {
+    const s = params.get('s');
+
+    if (s) {
       try {
-        const d = decompress(compressedData);
-        setCatalog(d.c || DEFAULT_CATALOG);
-        setBudget(d.b || 20000000);
-        setCommission(d.cm || 20);
-        setDiscountRate(d.dr || 0);
-        setDurationDays(d.dd || 28);
-        setStartDate(d.sd || new Date().toISOString().split('T')[0]);
-        setBookings(d.bk || []);
-      } catch (e) { console.error('Data Load Error', e); }
+        const d = decompress(s);
+        if (d.c) setCatalog(d.c);
+        if (d.b !== undefined) setBudget(d.b);
+        if (d.cm !== undefined) setCommission(d.cm);
+        if (d.dr !== undefined) setDiscountRate(d.dr);
+        if (d.dd !== undefined) setDurationDays(d.dd);
+        if (d.sd) setStartDate(d.sd);
+        if (d.bk) setBookings(d.bk);
+        console.log("Shared data loaded from URL");
+      } catch (e) {
+        console.error("Failed to load shared URL data", e);
+      }
     } else {
-      const savedCatalog = localStorage.getItem(`${STORAGE_KEY}_catalog`);
-      if (savedCatalog) setCatalog(JSON.parse(savedCatalog));
+      // Load from LocalStorage if no URL param
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          const d = JSON.parse(saved);
+          if (d.catalog) setCatalog(d.catalog);
+          if (d.budget) setBudget(d.budget);
+          if (d.commission) setCommission(d.commission);
+          if (d.discountRate) setDiscountRate(d.discountRate);
+          if (d.durationDays) setDurationDays(d.durationDays);
+          if (d.startDate) setStartDate(d.startDate);
+          if (d.bookings) setBookings(d.bookings);
+        } catch (e) {
+          console.error("Failed to load local storage", e);
+        }
+      }
     }
   }, []);
 
+  // 3. Auto-Save to LocalStorage
+  useEffect(() => {
+    const stateToSave = {
+      catalog, budget, commission, discountRate, durationDays, startDate, bookings
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+  }, [catalog, budget, commission, discountRate, durationDays, startDate, bookings]);
+
+  // 4. Handle Share (All-in-one URL)
   const handleShare = () => {
-    // URL 길이를 줄이기 위해 최소한의 데이터만 전달
     const state = { 
-      c: catalog.map(i => ({id:i.id, s:i.screen, p:i.placement, sz:i.size, t:i.ad_type, pr:i.price_4w, sl:i.total_slots, im:i.impressions_4w, ct:i.ctr})), 
-      b: budget, cm: commission, dr: discountRate, dd: durationDays, sd: startDate, bk: bookings 
+      c: catalog, 
+      b: budget, 
+      cm: commission, 
+      dr: discountRate, 
+      dd: durationDays, 
+      sd: startDate, 
+      bk: bookings 
     };
     const compressed = compress(state);
     const shareUrl = `${window.location.origin}${window.location.pathname}?s=${compressed}`;
-    navigator.clipboard.writeText(shareUrl).then(() => { setShowToast(true); setTimeout(() => setShowToast(false), 3000); });
+    
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    });
   };
 
   const handleDownloadPDF = async () => {
@@ -105,7 +142,6 @@ const App: React.FC = () => {
     setIsDownloading(true);
     window.scrollTo(0, 0);
     
-    // PDF 렌더링을 위해 잠깐의 시간 확보
     setTimeout(async () => {
       try {
         const canvas = await html2canvas(resultRef.current!, {
@@ -122,7 +158,7 @@ const App: React.FC = () => {
         pdf.addImage(imgData, 'PNG', 7, 10, imgWidth, imgHeight);
         pdf.save(`미디어믹스_제안서_${new Date().toISOString().split('T')[0]}.pdf`);
       } catch (e) { alert('PDF 생성 실패'); } finally { setIsDownloading(false); }
-    }, 100);
+    }, 150);
   };
 
   const handleGenerate = useCallback(() => {
@@ -139,13 +175,15 @@ const App: React.FC = () => {
 
   const result = calculateResult(currentLines, budget, discountRate, durationDays);
 
-  useEffect(() => { if (!isManualMode) handleGenerate(); }, [budget, durationDays, discountRate, catalog, handleGenerate, isManualMode]);
+  useEffect(() => { 
+    if (!isManualMode) handleGenerate(); 
+  }, [budget, durationDays, discountRate, catalog, handleGenerate, isManualMode]);
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-['Pretendard'] text-slate-800">
       {showToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-5 py-2.5 rounded-full shadow-2xl font-bold text-[10px] animate-bounce">
-          ✅ 공유 스마트 단축 링크가 복사되었습니다
+          ✅ 모든 데이터가 포함된 공유 단축 링크가 복사되었습니다
         </div>
       )}
 
@@ -155,7 +193,7 @@ const App: React.FC = () => {
             <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm shadow-md">M</div>
             <div>
               <h1 className="text-xs font-black text-slate-900 leading-none">메디게이트 믹스</h1>
-              <p className="text-[7px] font-bold text-indigo-500 uppercase tracking-widest">v6.1 Advanced</p>
+              <p className="text-[7px] font-bold text-indigo-500 uppercase tracking-widest">v7.0 Cloud Sync</p>
             </div>
           </div>
 
@@ -171,7 +209,7 @@ const App: React.FC = () => {
               {isDownloading ? '...' : 'PDF 제안서'}
             </button>
             <button onClick={handleShare} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-black shadow-md transition-all">
-              링크공유
+              스마트 링크 공유
             </button>
           </div>
         </div>
@@ -183,15 +221,15 @@ const App: React.FC = () => {
             <div className="lg:col-span-4 space-y-4">
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="bg-slate-900 px-4 py-2.5 flex items-center justify-between">
-                  <h2 className="text-white font-black text-[10px] uppercase tracking-widest">Option Panel</h2>
+                  <h2 className="text-white font-black text-[10px] uppercase tracking-widest">Campaign Setup</h2>
                 </div>
                 <div className="p-5 space-y-6">
                   <div className="space-y-2">
-                    <div className="flex justify-between items-end"><label className="text-[9px] font-black text-slate-500 uppercase">광고 예산</label><span className="text-base font-black text-indigo-600 tracking-tighter">{(budget/10000).toLocaleString()}만원</span></div>
+                    <div className="flex justify-between items-end"><label className="text-[9px] font-black text-slate-500 uppercase">가용 예산</label><span className="text-base font-black text-indigo-600 tracking-tighter">{(budget/10000).toLocaleString()}만원</span></div>
                     <input type="range" min="1000000" max="100000000" step="500000" value={budget} onChange={(e) => setBudget(Number(e.target.value))} className="w-full h-1 bg-slate-100 rounded-full appearance-none accent-indigo-600" />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-[9px] font-black text-slate-500 uppercase">집행 개시일</label>
+                    <label className="text-[9px] font-black text-slate-500 uppercase">시작 날짜</label>
                     <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] font-black text-slate-800 outline-none" />
                   </div>
                   <div className="space-y-2">
@@ -219,7 +257,7 @@ const App: React.FC = () => {
                         제안 미디어믹스 리스트
                       </h3>
                       {!isDownloading && (
-                        <select className="pdf-hide text-[9px] font-black border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none hover:border-indigo-500" onChange={(e) => { if(e.target.value) { const item = catalog.find(c => c.id === e.target.value); if(item) { setIsManualMode(true); setCurrentLines(prev => [...prev, createLine(item, durationDays)]); e.target.value = ""; } } }}>
+                        <select className="pdf-hide text-[9px] font-black border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none hover:border-indigo-500 cursor-pointer shadow-sm" onChange={(e) => { if(e.target.value) { const item = catalog.find(c => c.id === e.target.value); if(item) { setIsManualMode(true); setCurrentLines(prev => [...prev, createLine(item, durationDays)]); e.target.value = ""; } } }}>
                           <option value="">+ 상품 직접 추가</option>
                           {catalog.filter(c => !currentLines.find(l => l.id === c.id)).map(c => <option key={c.id} value={c.id}>[{c.screen}] {c.placement}</option>)}
                         </select>
@@ -231,11 +269,11 @@ const App: React.FC = () => {
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-100">
                             <th className="p-3 text-left font-black text-slate-400 uppercase tracking-tight">화면 | 위치</th>
-                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">사이즈</th>
+                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">배너 사이즈</th>
                             <th className="p-3 text-right font-black text-slate-400 uppercase tracking-tight">금액 (NET)</th>
                             <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">기간</th>
                             <th className="p-3 text-left font-black text-slate-400 uppercase tracking-tight">예상 노출량</th>
-                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">CTR</th>
+                            <th className="p-3 text-center font-black text-slate-400 uppercase tracking-tight">예상 CTR</th>
                             {!isDownloading && <th className="pdf-hide p-3 text-right font-black text-slate-400">관리</th>}
                           </tr>
                         </thead>
