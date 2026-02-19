@@ -49,65 +49,92 @@ const App: React.FC = () => {
   const [currentLines, setCurrentLines] = useState<MediaMixLine[]>([]);
   const [isManualMode, setIsManualMode] = useState(false);
 
-  // 1. Data Compression (Client-side Shortening)
+  // 1. Robust Data Compression
   const compress = (data: any) => {
-    const json = JSON.stringify(data);
-    const buf = new TextEncoder().encode(json);
-    const compressed = fflate.zlibSync(buf, { level: 9 });
-    return btoa(String.fromCharCode.apply(null, Array.from(compressed)))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    try {
+      const json = JSON.stringify(data);
+      const buf = new TextEncoder().encode(json);
+      const compressed = fflate.zlibSync(buf, { level: 9 });
+      
+      // btoa stack overflow 방지 로직
+      let binary = '';
+      const len = compressed.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(compressed[i]);
+      }
+      
+      return btoa(binary)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+    } catch (e) {
+      console.error("Compression Error", e);
+      return "";
+    }
   };
 
   const decompress = (str: string) => {
-    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4) base64 += '=';
-    const binary = atob(base64);
-    const buf = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) buf[i] = binary.charCodeAt(i);
-    const decompressed = fflate.unzlibSync(buf);
-    return JSON.parse(new TextDecoder().decode(decompressed));
+    try {
+      let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) base64 += '=';
+      const binaryString = atob(base64);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const decompressed = fflate.unzlibSync(bytes);
+      const decoded = new TextDecoder().decode(decompressed);
+      return JSON.parse(decoded);
+    } catch (e) {
+      console.error("Decompression Error", e);
+      return null;
+    }
   };
 
-  // 2. Persistent Storage & URL Load
+  // 2. Persistent Storage & URL Load Logic
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const s = params.get('s');
 
     if (s) {
-      try {
-        const d = decompress(s);
-        if (d.c) setCatalog(d.c);
-        if (d.b !== undefined) setBudget(d.b);
-        if (d.cm !== undefined) setCommission(d.cm);
-        if (d.dr !== undefined) setDiscountRate(d.dr);
-        if (d.dd !== undefined) setDurationDays(d.dd);
+      const d = decompress(s);
+      if (d) {
+        // 데이터가 유효할 때만 상태 업데이트
+        if (Array.isArray(d.c)) setCatalog(d.c);
+        if (typeof d.b === 'number') setBudget(d.b);
+        if (typeof d.cm === 'number') setCommission(d.cm);
+        if (typeof d.dr === 'number') setDiscountRate(d.dr);
+        if (typeof d.dd === 'number') setDurationDays(d.dd);
         if (d.sd) setStartDate(d.sd);
-        if (d.bk) setBookings(d.bk);
-        console.log("Shared data loaded from URL");
-      } catch (e) {
-        console.error("Failed to load shared URL data", e);
+        if (Array.isArray(d.bk)) setBookings(d.bk);
+        console.log("Shared data successfully loaded from URL");
+      } else {
+        console.warn("Shared data corrupted or incomplete. Falling back to local storage.");
+        loadFromLocalStorage();
       }
     } else {
-      // Load from LocalStorage if no URL param
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try {
-          const d = JSON.parse(saved);
-          if (d.catalog) setCatalog(d.catalog);
-          if (d.budget) setBudget(d.budget);
-          if (d.commission) setCommission(d.commission);
-          if (d.discountRate) setDiscountRate(d.discountRate);
-          if (d.durationDays) setDurationDays(d.durationDays);
-          if (d.startDate) setStartDate(d.startDate);
-          if (d.bookings) setBookings(d.bookings);
-        } catch (e) {
-          console.error("Failed to load local storage", e);
-        }
-      }
+      loadFromLocalStorage();
     }
   }, []);
+
+  const loadFromLocalStorage = () => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const d = JSON.parse(saved);
+        if (d.catalog) setCatalog(d.catalog);
+        if (d.budget !== undefined) setBudget(d.budget);
+        if (d.commission !== undefined) setCommission(d.commission);
+        if (d.discountRate !== undefined) setDiscountRate(d.discountRate);
+        if (d.durationDays !== undefined) setDurationDays(d.durationDays);
+        if (d.startDate) setStartDate(d.startDate);
+        if (d.bookings) setBookings(d.bookings);
+      } catch (e) {
+        console.error("Failed to parse local storage", e);
+      }
+    }
+  };
 
   // 3. Auto-Save to LocalStorage
   useEffect(() => {
@@ -117,8 +144,9 @@ const App: React.FC = () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
   }, [catalog, budget, commission, discountRate, durationDays, startDate, bookings]);
 
-  // 4. Handle Share (All-in-one URL)
+  // 4. Handle Share
   const handleShare = () => {
+    // URL 길이를 최대한 줄이기 위해 필수 데이터만 압축
     const state = { 
       c: catalog, 
       b: budget, 
@@ -129,8 +157,17 @@ const App: React.FC = () => {
       bk: bookings 
     };
     const compressed = compress(state);
+    if (!compressed) {
+      alert("공유 데이터 생성 중 오류가 발생했습니다.");
+      return;
+    }
     const shareUrl = `${window.location.origin}${window.location.pathname}?s=${compressed}`;
     
+    // Vercel 등 배포 환경에서 URL 길이 제한이 있을 수 있으므로 알림 추가
+    if (shareUrl.length > 3500) {
+      console.warn("Shared URL is very long. It might be truncated in some browsers.");
+    }
+
     navigator.clipboard.writeText(shareUrl).then(() => {
       setShowToast(true);
       setTimeout(() => setShowToast(false), 3000);
@@ -162,6 +199,7 @@ const App: React.FC = () => {
   };
 
   const handleGenerate = useCallback(() => {
+    if (!catalog.length) return;
     const input: MediaMixInput = {
       budget_total: budget, catalog, priority_order: catalog.map(c => c.id),
       commission_rate: commission, discount: { type: "none", rate: discountRate },
@@ -183,7 +221,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 pb-20 font-['Pretendard'] text-slate-800">
       {showToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] bg-slate-900 text-white px-5 py-2.5 rounded-full shadow-2xl font-bold text-[10px] animate-bounce">
-          ✅ 모든 데이터가 포함된 공유 단축 링크가 복사되었습니다
+          ✅ 모든 데이터가 포함된 안전한 공유 링크가 복사되었습니다
         </div>
       )}
 
@@ -193,7 +231,7 @@ const App: React.FC = () => {
             <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm shadow-md">M</div>
             <div>
               <h1 className="text-xs font-black text-slate-900 leading-none">메디게이트 믹스</h1>
-              <p className="text-[7px] font-bold text-indigo-500 uppercase tracking-widest">v7.0 Cloud Sync</p>
+              <p className="text-[7px] font-bold text-indigo-500 uppercase tracking-widest">v7.2 Cloud Stable</p>
             </div>
           </div>
 
