@@ -1,5 +1,5 @@
 {
-  "name": "copy-of-메디게이트-자동-미디어믹스-생성기",
+  "name": "메디게이트-자동-미디어믹스-생성기",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "@google/genai": "^1.41.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

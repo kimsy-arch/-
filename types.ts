@@ -1,13 +1,24 @@
 
+export enum Type {
+  TYPE_UNSPECIFIED = 'TYPE_UNSPECIFIED',
+  STRING = 'STRING',
+  NUMBER = 'NUMBER',
+  INTEGER = 'INTEGER',
+  BOOLEAN = 'BOOLEAN',
+  ARRAY = 'ARRAY',
+  OBJECT = 'OBJECT',
+  NULL = 'NULL',
+}
+
 export interface CatalogItem {
-  id: string; // 상품 식별자 추가
+  id: string; 
   screen: string;
   placement: string;
   size: string;
   ad_type: string;
   price_4w: number;
   rotation: string;
-  total_slots: number; // 총 구좌수
+  total_slots: number; 
   impressions_4w: string | number;
   ctr: string;
 }

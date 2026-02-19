@@ -6,13 +6,15 @@ interface Props {
   catalog: CatalogItem[];
   bookings: Booking[];
   onAddBooking: (booking: Booking) => void;
+  onAddBookings: (bookings: Booking[]) => void;
   onUpdateBooking: (booking: Booking) => void;
   onDeleteBooking: (id: string) => void;
 }
 
-const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onUpdateBooking, onDeleteBooking }) => {
+const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onAddBookings, onUpdateBooking, onDeleteBooking }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Booking>>({});
+  const [excelInput, setExcelInput] = useState('');
   
   const [formData, setFormData] = useState({
     productId: catalog[0]?.id || '',
@@ -33,6 +35,85 @@ const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onUp
     setFormData({ ...formData, clientName: '', start_date: '', end_date: '', slots_used: 1 });
   };
 
+  const isValidDate = (dateStr: string) => {
+    if (!dateStr) return false;
+    const normalizedDate = dateStr.trim().replace(/[\.\/]/g, '-');
+    const reg = /^\d{4}-\d{2}-\d{2}$/;
+    return reg.test(normalizedDate);
+  };
+
+  /**
+   * 엑셀에서 복사한 데이터를 분석하여 일괄 등록
+   */
+  const handleSmartImport = () => {
+    if (!excelInput.trim()) return;
+
+    const lines = excelInput.trim().split('\n');
+    let newBookings: Booking[] = [];
+    let failCount = 0;
+    let errorDetails: string[] = [];
+
+    lines.forEach((line, index) => {
+      // 헤더 및 빈 줄 스킵
+      if (index === 0 && (line.includes('업체명') || line.includes('상품') || line.includes('기간'))) return;
+      if (!line.trim()) return;
+
+      // 탭(\t), 쉼표(,), 세로바(|)를 모두 구분자로 사용
+      const parts = line.split(/\t|,|\|/).map(p => p.trim());
+      
+      if (parts.length < 3) {
+        failCount++;
+        errorDetails.push(`라인 ${index + 1}: 데이터 컬럼 부족`);
+        return;
+      }
+
+      const clientName = parts[0];
+      const productCode = parts[1].toUpperCase();
+      const periodStr = parts[2];
+
+      // 기간 분해 (2026-01-19 ~ 2026-01-31)
+      const dates = periodStr.split('~').map(d => d.trim().replace(/[\.\/]/g, '-'));
+      const startDate = dates[0];
+      const endDate = dates[1] || dates[0];
+
+      if (!clientName || !productCode || !isValidDate(startDate) || !isValidDate(endDate)) {
+        failCount++;
+        errorDetails.push(`라인 ${index + 1}: 형식 오류 (${clientName || '업체명없음'})`);
+        return;
+      }
+
+      // 상품 ID 매칭
+      const matchedProduct = catalog.find(p => 
+        p.id.toUpperCase() === productCode || 
+        productCode.includes(p.id.toUpperCase())
+      );
+
+      if (!matchedProduct) {
+        failCount++;
+        errorDetails.push(`라인 ${index + 1}: 매칭 상품 없음 (${productCode})`);
+        return;
+      }
+
+      newBookings.push({
+        id: `book-ex-${Date.now()}-${index}`,
+        productId: matchedProduct.id,
+        clientName: clientName,
+        start_date: startDate,
+        end_date: endDate,
+        slots_used: 1
+      });
+    });
+
+    if (newBookings.length > 0) {
+      onAddBookings(newBookings);
+      alert(`${newBookings.length}건이 성공적으로 등록되었습니다.\n(실패: ${failCount}건)`);
+    } else if (failCount > 0) {
+      alert(`등록 가능한 데이터가 없습니다.\n\n[오류 내역]\n${errorDetails.slice(0, 5).join('\n')}${errorDetails.length > 5 ? '\n...' : ''}`);
+    }
+
+    setExcelInput('');
+  };
+
   const startEditing = (b: Booking) => {
     setEditingId(b.id);
     setEditData(b);
@@ -45,16 +126,17 @@ const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onUp
 
   const handleSaveEdit = () => {
     if (editingId && editData.start_date && editData.end_date) {
+      if (!isValidDate(editData.start_date) || !isValidDate(editData.end_date)) {
+        alert('날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)');
+        return;
+      }
       onUpdateBooking(editData as Booking);
       setEditingId(null);
     }
   };
 
-  // 광고주별로 부킹 내역 그룹화
   const groupedBookings = bookings.reduce((acc, booking) => {
-    if (!acc[booking.clientName]) {
-      acc[booking.clientName] = [];
-    }
+    if (!acc[booking.clientName]) acc[booking.clientName] = [];
     acc[booking.clientName].push(booking);
     return acc;
   }, {} as Record<string, Booking[]>);
@@ -62,164 +144,97 @@ const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onUp
   const advertisers = Object.keys(groupedBookings).sort();
 
   return (
-    <div className="space-y-8">
-      {/* 신규 등록 폼 */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-        <h3 className="text-slate-800 font-bold text-md mb-4 flex items-center gap-2">
-          <span className="w-1.5 h-4 bg-indigo-600 rounded-full"></span>
-          신규 부킹 등록
-        </h3>
-        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">상품 선택</label>
-            <select 
-              value={formData.productId} 
-              onChange={e => setFormData({...formData, productId: e.target.value})}
-              className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none appearance-none cursor-pointer"
-            >
-              {catalog.map(item => <option key={item.id} value={item.id}>{item.placement} ({item.screen})</option>)}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">광고주명 (업체)</label>
-            <input 
-              type="text" value={formData.clientName} placeholder="예: A제약"
-              onChange={e => setFormData({...formData, clientName: e.target.value})}
-              className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-            />
-          </div>
-          <div className="space-y-1 md:col-span-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">집행 기간 (박스 클릭)</label>
-            <div className="flex gap-1 h-10">
-              <input 
-                type="date" 
-                value={formData.start_date} 
-                onChange={e => setFormData({...formData, start_date: e.target.value})} 
-                className="flex-1 px-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] cursor-pointer hover:border-indigo-400 transition-colors focus:ring-2 focus:ring-indigo-500 outline-none block w-full" 
-              />
-              <input 
-                type="date" 
-                value={formData.end_date} 
-                onChange={e => setFormData({...formData, end_date: e.target.value})} 
-                className="flex-1 px-2 bg-slate-50 border border-slate-200 rounded-lg text-[10px] cursor-pointer hover:border-indigo-400 transition-colors focus:ring-2 focus:ring-indigo-500 outline-none block w-full" 
-              />
+    <div className="space-y-8 pb-20">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-full">
+          <h3 className="text-slate-800 font-bold text-md mb-4 flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-indigo-600 rounded-full"></span>
+            신규 부킹 개별 등록
+          </h3>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">상품 선택</label>
+                <select value={formData.productId} onChange={e => setFormData({...formData, productId: e.target.value})} className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none">
+                  {catalog.map(item => <option key={item.id} value={item.id}>{item.placement} ({item.screen})</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">광고주명</label>
+                <input type="text" value={formData.clientName} placeholder="업체명 입력" onChange={e => setFormData({...formData, clientName: e.target.value})} className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">시작일</label>
+                <input type="date" value={formData.start_date} onChange={e => setFormData({...formData, start_date: e.target.value})} className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold outline-none cursor-pointer" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">종료일</label>
+                <input type="date" value={formData.end_date} onChange={e => setFormData({...formData, end_date: e.target.value})} className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold outline-none cursor-pointer" />
+              </div>
+            </div>
+            <button type="submit" className="w-full h-10 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition-colors shadow-lg shadow-indigo-100">부킹 추가하기</button>
+          </form>
+        </div>
+        <div className="bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-700 h-full">
+          <h3 className="text-white font-bold text-md mb-4 flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-green-500 rounded-full"></span>
+            엑셀 데이터 스마트 붙여넣기
+          </h3>
+          <div className="space-y-4">
+            <textarea value={excelInput} onChange={(e) => setExcelInput(e.target.value)} placeholder="여러 줄을 한 번에 붙여넣으세요.&#10;업체명 | 상품 | 게재 기간 순서로 인식합니다." className="w-full h-32 p-4 bg-slate-900 border border-slate-700 rounded-xl text-[11px] text-slate-300 font-medium placeholder:text-slate-600 focus:ring-2 focus:ring-green-500 outline-none resize-none"></textarea>
+            <div className="flex justify-between items-center">
+              <p className="text-[10px] text-slate-500 font-medium">※ 구분자 상관없이 모든 행을 한 번에 등록합니다.</p>
+              <button onClick={handleSmartImport} className="px-6 h-10 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-2 shadow-lg shadow-green-900/20">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                분석 후 일괄 등록 (여러 건 처리)
+              </button>
             </div>
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">구좌수</label>
-            <input 
-              type="number" min="1" max="10" value={formData.slots_used}
-              onChange={e => setFormData({...formData, slots_used: Number(e.target.value)})}
-              className="w-full h-10 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
-            />
-          </div>
-          <div className="flex items-end">
-            <button type="submit" className="w-full h-10 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg text-xs transition-colors shadow-lg shadow-indigo-100">부킹 추가</button>
-          </div>
-        </form>
-      </div>
-
-      {/* 업체별 그룹화 리스트 */}
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h3 className="text-slate-800 font-black text-lg flex items-center gap-2">
-            📋 업체별 부킹 관리
-            <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{advertisers.length}개 업체</span>
-          </h3>
         </div>
-
+      </div>
+      <div className="space-y-6">
+        <h3 className="text-slate-800 font-black text-lg flex items-center gap-2">📋 현재 부킹 리스트 <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{bookings.length}개 항목</span></h3>
         {advertisers.length === 0 ? (
-          <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 p-20 text-center text-slate-400">
-            <p className="font-bold">등록된 부킹 내역이 없습니다.</p>
-            <p className="text-[10px] mt-1 uppercase tracking-widest font-medium">Please add a new booking above</p>
-          </div>
+          <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 p-20 text-center text-slate-400 font-bold">등록된 부킹 내역이 없습니다.</div>
         ) : (
-          advertisers.map(advertiser => {
-            const items = groupedBookings[advertiser];
-            const totalSlots = items.reduce((sum, i) => sum + i.slots_used, 0);
-            
-            return (
-              <div key={advertiser} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                {/* 업체 헤더 */}
-                <div className="bg-slate-50 px-6 py-3 border-b border-slate-100 flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center shadow-sm">
-                      <span className="text-indigo-600 font-black text-sm">{advertiser.charAt(0)}</span>
-                    </div>
-                    <h4 className="text-slate-900 font-black text-sm">{advertiser}</h4>
-                  </div>
-                  <div className="flex gap-4">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">
-                      배너 수: <span className="text-indigo-600">{items.length}개</span>
-                    </div>
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">
-                      총 점유구좌: <span className="text-indigo-600">{totalSlots} Slots</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 업체별 부킹 내역 테이블 */}
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50/50 text-[10px] text-slate-400 font-bold uppercase tracking-wider border-b border-slate-50">
-                    <tr>
-                      <th className="px-6 py-2 text-left w-1/4">상품명 / 위치</th>
-                      <th className="px-6 py-2 text-center w-1/3">집행 기간</th>
-                      <th className="px-6 py-2 text-center">구좌</th>
-                      <th className="px-6 py-2 text-right">관리</th>
-                    </tr>
+          advertisers.map(advertiser => (
+            <div key={advertiser} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-slate-50 px-6 py-3 border-b border-slate-100 flex justify-between items-center">
+                <h4 className="text-slate-900 font-black text-sm">{advertiser}</h4>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{groupedBookings[advertiser].length} Banners</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs min-w-[600px]">
+                  <thead className="bg-slate-50/50 text-[10px] text-slate-400 font-bold border-b border-slate-50">
+                    <tr><th className="px-6 py-2 text-left">상품/위치</th><th className="px-6 py-2 text-center">집행 기간</th><th className="px-6 py-2 text-right">관리</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {items.map(b => {
+                    {groupedBookings[advertiser].map(b => {
                       const product = catalog.find(c => c.id === b.productId);
                       return (
-                        <tr key={b.id} className="hover:bg-indigo-50/30 transition-colors">
-                          <td className="px-6 py-4">
-                            <div className="flex flex-col">
-                              <span className="font-bold text-slate-800">{product?.placement}</span>
-                              <span className="text-[10px] text-slate-400 font-medium">{product?.screen}</span>
-                            </div>
-                          </td>
+                        <tr key={b.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-4"><p className="font-bold text-slate-800">{product?.placement}</p><p className="text-[10px] text-slate-400">{product?.screen}</p></td>
                           <td className="px-6 py-4 text-center">
                             {editingId === b.id ? (
                               <div className="flex items-center gap-1 justify-center">
-                                <input 
-                                  type="date" 
-                                  value={editData.start_date} 
-                                  onChange={e => setEditData({...editData, start_date: e.target.value})}
-                                  className="p-1.5 border border-indigo-200 rounded text-[10px] cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500 w-28"
-                                />
+                                <input type="date" value={editData.start_date} onChange={e => setEditData({...editData, start_date: e.target.value})} className="p-1 border rounded text-[10px]" />
                                 <span className="text-slate-300">~</span>
-                                <input 
-                                  type="date" 
-                                  value={editData.end_date} 
-                                  onChange={e => setEditData({...editData, end_date: e.target.value})}
-                                  className="p-1.5 border border-indigo-200 rounded text-[10px] cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500 w-28"
-                                />
+                                <input type="date" value={editData.end_date} onChange={e => setEditData({...editData, end_date: e.target.value})} className="p-1 border rounded text-[10px]" />
                               </div>
-                            ) : (
-                              <div className="inline-flex items-center gap-2 bg-slate-100/50 px-3 py-1 rounded-full text-slate-600 font-bold tracking-tighter">
-                                {b.start_date} <span className="text-slate-300">→</span> {b.end_date}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span className="font-black text-indigo-600 text-sm">{b.slots_used}</span>
-                            <span className="text-[9px] text-slate-400 ml-0.5">Slots</span>
+                            ) : <span className="font-bold text-slate-600">{b.start_date} ~ {b.end_date}</span>}
                           </td>
                           <td className="px-6 py-4 text-right">
                             {editingId === b.id ? (
                               <div className="flex gap-2 justify-end">
-                                <button onClick={handleSaveEdit} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-bold text-[10px] hover:bg-indigo-700 shadow-sm transition-all">완료</button>
-                                <button onClick={cancelEditing} className="bg-slate-100 text-slate-500 px-3 py-1.5 rounded-lg font-bold text-[10px] hover:bg-slate-200 transition-all">취소</button>
+                                <button onClick={handleSaveEdit} className="bg-indigo-600 text-white px-2 py-1 rounded font-bold text-[10px]">완료</button>
+                                <button onClick={cancelEditing} className="text-slate-400 font-bold text-[10px]">취소</button>
                               </div>
                             ) : (
-                              <div className="flex gap-3 justify-end items-center">
-                                <button onClick={() => startEditing(b)} className="text-slate-400 hover:text-indigo-600 font-bold transition-colors">
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
-                                </button>
-                                <button onClick={() => onDeleteBooking(b.id)} className="text-slate-400 hover:text-rose-500 font-bold transition-colors">
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                </button>
+                              <div className="flex gap-4 justify-end">
+                                <button onClick={() => startEditing(b)} className="text-slate-400 hover:text-indigo-600">수정</button>
+                                <button onClick={() => onDeleteBooking(b.id)} className="text-slate-400 hover:text-rose-500">삭제</button>
                               </div>
                             )}
                           </td>
@@ -229,8 +244,8 @@ const BookingManager: React.FC<Props> = ({ catalog, bookings, onAddBooking, onUp
                   </tbody>
                 </table>
               </div>
-            );
-          })
+            </div>
+          ))
         )}
       </div>
     </div>

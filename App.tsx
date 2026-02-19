@@ -31,7 +31,6 @@ const DEFAULT_CATALOG: CatalogItem[] = [
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'mixer' | 'bookings' | 'schedule' | 'catalog'>('mixer');
   
-  // 상태 초기화
   const [catalog, setCatalog] = useState<CatalogItem[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_catalog`);
     return saved ? JSON.parse(saved) : DEFAULT_CATALOG;
@@ -64,7 +63,6 @@ const App: React.FC = () => {
   const [currentLines, setCurrentLines] = useState<MediaMixLine[]>([]);
   const [isManualMode, setIsManualMode] = useState(false);
 
-  // 데이터 변경 시 LocalStorage 저장
   useEffect(() => {
     localStorage.setItem(`${STORAGE_KEY}_catalog`, JSON.stringify(catalog));
     localStorage.setItem(`${STORAGE_KEY}_budget`, budget.toString());
@@ -98,41 +96,45 @@ const App: React.FC = () => {
     setIsManualMode(false);
   }, [budget, commission, discountRate, durationDays, startDate, bookings, catalog]);
 
-  // 부킹 업데이트 핸들러 (Fix for: Cannot find name 'updateBooking')
+  const addBooking = useCallback((b: Booking) => {
+    setBookings(prev => [...prev, b]);
+  }, []);
+
+  const addBookings = useCallback((newItems: Booking[]) => {
+    setBookings(prev => [...prev, ...newItems]);
+  }, []);
+
   const updateBooking = useCallback((updated: Booking) => {
     setBookings(prev => prev.map(b => b.id === updated.id ? updated : b));
   }, []);
 
-  // 최초 로드 및 주요 설정 변경 시 자동 제안 (단, 수동 모드가 아닐 때만)
+  const deleteBooking = useCallback((id: string) => {
+    setBookings(prev => prev.filter(b => b.id !== id));
+  }, []);
+
   useEffect(() => { 
     if (!isManualMode) {
       handleGenerate(); 
     }
   }, [budget, durationDays, discountRate, catalog, handleGenerate, isManualMode]);
 
-  // 수동 편집: 라인 삭제
   const handleRemoveLine = (idx: number) => {
     setIsManualMode(true);
     setCurrentLines(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // 수동 편집: 라인 추가
   const handleAddLine = (productId: string) => {
     const item = catalog.find(c => c.id === productId);
     if (!item) return;
-    
-    // 이미 추가된 상품인지 체크 (중복 방지 룰 적용 시)
     if (currentLines.find(l => l.id === productId)) {
       alert('이미 믹스에 포함된 상품입니다.');
       return;
     }
-
     setIsManualMode(true);
     const newLine = createLine(item, durationDays);
     setCurrentLines(prev => [...prev, newLine]);
   };
 
-  // 최종 결과 계산 (currentLines 기반)
   const result = calculateResult(currentLines, budget, discountRate, durationDays);
 
   const formatDuration = (days: number) => {
@@ -178,7 +180,6 @@ const App: React.FC = () => {
       <main className="max-w-7xl mx-auto px-4 mt-8">
         {activeTab === 'mixer' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* 좌측 컨트롤러 */}
             <div className="lg:col-span-4 space-y-6">
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="bg-slate-800 px-5 py-4 flex items-center justify-between">
@@ -195,20 +196,14 @@ const App: React.FC = () => {
                     </div>
                     <input type="range" min="1000000" max="100000000" step="500000" value={budget} onChange={(e) => setBudget(Number(e.target.value))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
                   </div>
-
                   <div className="space-y-4">
                     <label className="text-sm font-bold text-slate-700">집행 시작일</label>
                     <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full h-12 px-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:outline-indigo-500 cursor-pointer" />
                   </div>
-
                   <div className="space-y-4">
                     <label className="text-sm font-bold text-slate-700">집행 기간: {formatDuration(durationDays)}</label>
-                    <input type="range" min="1" max="90" step="1" value={durationDays} onChange={(e) => {
-                      setDurationDays(Number(e.target.value));
-                      setIsManualMode(false); // 기간 변경 시에는 전체 척도가 바뀌므로 자동 제안 모드로 복귀 추천
-                    }} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                    <input type="range" min="1" max="90" step="1" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
                   </div>
-
                   <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">수수료 ({commission}%)</label>
@@ -219,24 +214,17 @@ const App: React.FC = () => {
                       <input type="range" min="0" max="50" step="1" value={discountRate} onChange={(e) => setDiscountRate(Number(e.target.value))} className="w-full accent-indigo-400" />
                     </div>
                   </div>
-
-                  <button 
-                    onClick={handleGenerate}
-                    className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-black transition-all uppercase tracking-tighter flex items-center justify-center gap-2"
-                  >
+                  <button onClick={handleGenerate} className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-black transition-all uppercase tracking-tighter flex items-center justify-center gap-2">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                     AI 제안 다시받기 (초기화)
                   </button>
                 </div>
               </div>
             </div>
-
-            {/* 우측 결과창 */}
             <div className="lg:col-span-8 space-y-6">
               {result && (
                 <>
                   <SummaryCard result={result} budgetTotal={budget} commissionRate={commission} />
-                  
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
                     <div className="flex justify-between items-center">
                       <h3 className="text-slate-800 font-bold text-md flex items-center gap-2">
@@ -244,26 +232,12 @@ const App: React.FC = () => {
                         맞춤 미디어믹스 리스트
                       </h3>
                       <div className="flex gap-2">
-                        <select 
-                          className="text-[11px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500"
-                          onChange={(e) => {
-                            if(e.target.value) {
-                              handleAddLine(e.target.value);
-                              e.target.value = "";
-                            }
-                          }}
-                        >
+                        <select className="text-[11px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500" onChange={(e) => { if(e.target.value) { handleAddLine(e.target.value); e.target.value = ""; } }}>
                           <option value="">+ 지면 직접 추가</option>
-                          {catalog
-                            .filter(c => !currentLines.find(l => l.id === c.id))
-                            .map(c => (
-                              <option key={c.id} value={c.id}>[{c.screen}] {c.placement}</option>
-                            ))
-                          }
+                          {catalog.filter(c => !currentLines.find(l => l.id === c.id)).map(c => <option key={c.id} value={c.id}>[{c.screen}] {c.placement}</option>)}
                         </select>
                       </div>
                     </div>
-
                     <div className="overflow-x-auto border border-slate-100 rounded-xl">
                       <table className="min-w-full text-xs">
                         <thead className="bg-slate-50 text-slate-500 font-bold">
@@ -285,26 +259,17 @@ const App: React.FC = () => {
                               <td className="p-3 text-center font-bold text-slate-400">{formatDuration(l.days)}</td>
                               <td className="p-3 text-slate-600 font-medium">{l.impressions_actual_text}</td>
                               <td className="p-3 text-right">
-                                <button 
-                                  onClick={() => handleRemoveLine(i)}
-                                  className="text-slate-300 hover:text-rose-500 transition-colors p-1"
-                                  title="삭제"
-                                >
+                                <button onClick={() => handleRemoveLine(i)} className="text-slate-300 hover:text-rose-500 transition-colors p-1" title="삭제">
                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                                 </button>
                               </td>
                             </tr>
                           ))}
-                          {result.lines.length === 0 && (
-                            <tr>
-                              <td colSpan={6} className="p-10 text-center text-slate-400 font-medium">선택된 광고 지면이 없습니다.</td>
-                            </tr>
-                          )}
+                          {result.lines.length === 0 && <tr><td colSpan={6} className="p-10 text-center text-slate-400 font-medium">선택된 광고 지면이 없습니다.</td></tr>}
                         </tbody>
                       </table>
                     </div>
                   </div>
-
                   <VisualBars lines={result.lines} subtotal={result.subtotal} />
                 </>
               )}
@@ -316,22 +281,14 @@ const App: React.FC = () => {
           <BookingManager 
             catalog={catalog} 
             bookings={bookings} 
-            onAddBooking={(b) => setBookings([...bookings, b])}
+            onAddBooking={addBooking}
+            onAddBookings={addBookings}
             onUpdateBooking={updateBooking}
-            onDeleteBooking={(id) => setBookings(bookings.filter(b => b.id !== id))}
+            onDeleteBooking={deleteBooking}
           />
         )}
-
-        {activeTab === 'schedule' && (
-          <ScheduleChart catalog={catalog} bookings={bookings} />
-        )}
-
-        {activeTab === 'catalog' && (
-          <CatalogManager 
-            catalog={catalog} 
-            onUpdateCatalog={setCatalog} 
-          />
-        )}
+        {activeTab === 'schedule' && <ScheduleChart catalog={catalog} bookings={bookings} />}
+        {activeTab === 'catalog' && <CatalogManager catalog={catalog} onUpdateCatalog={setCatalog} />}
       </main>
     </div>
   );
